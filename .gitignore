@@ -16,3 +16,9 @@ venv/
 
 # OS
 .DS_Store
+
+# Local editor/agent tool configs
+.zcodeignore/
+.zcodeignore
+.vscode/
+.idea/
