@@ -19,6 +19,33 @@ def _print(obj) -> None:
     print(json.dumps(obj, ensure_ascii=False, indent=2))
 
 
+def _print_evidence(res) -> None:
+    """Human-readable evidence report (default CLI output stays JSON)."""
+    print(f"Query: {res['query']}")
+    print()
+    print(f"Matching passages: {len(res['passages'])}")
+    print(f"Videos: {len(res['videos'])}")
+    print(f"Unique channels: {res['unique_channels']}")
+    print()
+    print("Channel distribution:")
+    for ch, n in sorted(
+        res["channel_distribution"].items(), key=lambda kv: -kv[1]
+    ):
+        print(f"- {ch}: {n}")
+    print()
+    print(f"Independent: {str(res['independent']).lower()}")
+    if res.get("warning"):
+        print()
+        print(f"Warning:\n{res['warning']}")
+    print()
+    print("Evidence:")
+    for p in res["passages"]:
+        mm, ss = divmod(int(p["start_seconds"]), 60)
+        print(f"\n[{mm:02d}:{ss:02d}] {p['title']} — {p['channel']}")
+        print(p["link"])
+        print(p["text"])
+
+
 def _fail(msg: str, hint: str = "") -> int:
     """Print an error the way a CLI should: message + optional hint, no traceback."""
     print(f"error: {msg}", file=sys.stderr)
@@ -50,6 +77,16 @@ def main(argv=None) -> int:
     p_s.add_argument("query")
     p_s.add_argument("-k", type=int, default=5)
     p_s.add_argument("--topic", default="")
+
+    p_e = sub.add_parser(
+        "evidence", help="Retrieve evidence with source/channel analysis"
+    )
+    p_e.add_argument("query")
+    p_e.add_argument("-k", type=int, default=6)
+    p_e.add_argument("--topic", default="")
+    p_e.add_argument(
+        "--pretty", action="store_true", help="human-readable report (default: JSON)"
+    )
 
     sub.add_parser("stats", help="Show knowledge-base statistics")
 
@@ -84,6 +121,9 @@ def main(argv=None) -> int:
         _print(res)
     elif args.cmd == "search":
         _print(agent.search_knowledge(args.query, k=args.k, topic=(args.topic or None)))
+    elif args.cmd == "evidence":
+        res = agent.search_evidence(args.query, k=args.k, topic=(args.topic or None))
+        _print_evidence(res) if args.pretty else _print(res)
     elif args.cmd == "stats":
         _print(agent.stats())
     else:  # pragma: no cover

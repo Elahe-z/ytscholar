@@ -125,6 +125,30 @@ def search_knowledge(query: str, k: int = 5, topic: str = "") -> dict:
 
 
 @mcp.tool()
+def search_evidence(query: str, k: int = 6, topic: str = "") -> dict:
+    """Retrieve evidence passages relevant to a query from the stored
+    transcripts, together with source analysis.
+
+    Returns the matching passages (each with video_id, title, channel,
+    start_seconds, text, score, and a timestamped link that opens the video
+    at that exact moment), plus grouping over videos and channels:
+    unique_channels and channel_distribution show how diverse the sources
+    really are, and independent/warning flag when the evidence concentrates
+    in a single channel. Several passages may come from the same video or
+    channel — do not count them as independent sources.
+
+    Use this tool to find where the evidence is; use get_transcript(video_id)
+    when you need the full transcript of a source for deeper analysis.
+
+    Args:
+        query: Natural-language question or keywords.
+        k: Number of passages to return.
+        topic: Optional filter to a topic previously passed to research_topic.
+    """
+    return agent().search_evidence(query, k=k, topic=(topic or None))
+
+
+@mcp.tool()
 def knowledge_stats() -> dict:
     """Report what the agent has learned so far: videos, chunks, topics, and
     whether semantic embeddings are active. Useful to check memory state."""

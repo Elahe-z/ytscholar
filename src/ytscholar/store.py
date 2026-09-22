@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Optional
 
 from .config import Config
-from .youtube import Snippet, Transcript, VideoMeta, timestamped_url
+from .youtube import Snippet, Transcript, VideoMeta, timestamped_url, video_url
 
 log = logging.getLogger("ytscholar.store")
 
@@ -342,6 +342,73 @@ class KnowledgeBase:
             for r in rows[:k]
         ]
         return hits
+
+    # -- evidence retrieval (v0.2) ------------------------------------------
+
+    def search_evidence(
+        self, query: str, k: int = 6, topic: Optional[str] = None
+    ) -> dict:
+        """Retrieve evidence passages plus source/channel analysis.
+
+        Wraps :meth:`search` (same FTS5 engine, unchanged) and groups the
+        hits by video and channel, so a consuming LLM can judge how diverse
+        the sources really are.
+
+        ``independent`` is a deterministic channel-variety heuristic only:
+        True means no single channel accounts for a strict majority of the
+        matching videos. It is not an epistemic guarantee of independence.
+        """
+        hits = self.search(query, k=k, topic=topic)
+
+        videos: dict[str, dict] = {}
+        channel_videos: dict[str, set] = {}
+        for h in hits:
+            v = videos.get(h.video_id)
+            if v is None:
+                v = {
+                    "video_id": h.video_id,
+                    "title": h.title,
+                    "channel": h.channel or "(unknown channel)",
+                    "url": video_url(h.video_id),
+                    "passages": 0,
+                }
+                videos[h.video_id] = v
+            v["passages"] += 1
+            channel_videos.setdefault(v["channel"], set()).add(h.video_id)
+
+        channel_distribution = {c: len(ids) for c, ids in channel_videos.items()}
+        unique_channels = len(channel_distribution)
+        independent = False
+        warning = None
+        if videos:
+            n_videos = len(videos)
+            dominant_channel, dominant_n = max(
+                channel_distribution.items(), key=lambda kv: kv[1]
+            )
+            if unique_channels == 1:
+                independent = False
+                warning = (
+                    f"All {n_videos} matching videos come from the same channel "
+                    f"('{dominant_channel}'). Evidence may not be independent."
+                )
+            elif dominant_n > n_videos - dominant_n:
+                independent = False
+                warning = (
+                    f"{dominant_n} of {n_videos} matching videos come from the "
+                    f"same channel ('{dominant_channel}'). Evidence may not be "
+                    "fully independent."
+                )
+            else:
+                independent = True
+
+        return {
+            "passages": [h.to_dict() for h in hits],
+            "videos": list(videos.values()),
+            "unique_channels": unique_channels,
+            "channel_distribution": channel_distribution,
+            "independent": independent,
+            "warning": warning,
+        }
 
     # -- introspection -----------------------------------------------------
 

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ytscholar"
-version = "0.1.0"
+version = "0.2.0"
 description = "A self-learning YouTube research agent, exposed as an MCP server: pull transcripts from the top videos on a topic, grow a local knowledge base, and answer questions from it."
 readme = "README.md"
 requires-python = ">=3.10"

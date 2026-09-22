@@ -154,5 +154,18 @@ class Agent:
             "results": [h.to_dict() for h in hits],
         }
 
+    # -- v0.2: evidence retrieval with source/channel awareness -------------
+
+    def search_evidence(
+        self, query: str, k: int = 6, topic: Optional[str] = None
+    ) -> dict:
+        """Evidence retrieval: same engine as search_knowledge, but grouped
+        by video and channel so the consuming LLM can see how many sources
+        actually back the evidence (and whether they concentrate in one
+        channel). Deterministic; no LLM involved.
+        """
+        result = self.kb.search_evidence(query, k=k, topic=topic)
+        return {"query": query, "topic": topic, **result}
+
     def stats(self) -> dict:
         return self.kb.stats()

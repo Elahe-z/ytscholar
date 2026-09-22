@@ -1,18 +1,24 @@
 # ytscholar 🎓📺
 
-**A self-learning YouTube research agent (MVP).** It finds the top YouTube
-videos on a topic, pulls their transcripts, and grows a local knowledge base
-you can search — every result comes with a deep link to the exact second of
-the source video.
+**A local YouTube evidence layer (MVP).** It finds the top YouTube videos on
+a topic, pulls their transcripts, and grows a local knowledge base — then
+exposes searchable, source-aware **evidence** and **full transcripts** to LLM
+clients, so the model can research, compare sources, and synthesize with
+citations you can verify by clicking.
 
 It runs entirely on your machine: no API keys, no cloud service, no
 subscription. You can use it from the CLI or as an [MCP server](#mcp) inside
 Claude Desktop, Cursor, Cline, or any MCP-compatible client.
 
-> **Status: MVP.** The core loop — research → store → search with timestamped
-> citations — works and is covered by offline tests (the network path was also
-> validated manually against real YouTube). It is deliberately small. See
-> [Limitations](#limitations) for what it is *not*.
+> **Design boundary:** ytscholar collects, stores, and retrieves evidence.
+> It does **not** reason — no claim extraction, no summarizing, no
+> contradiction detection. Analysis and synthesis belong to the LLM client
+> consuming this data.
+
+> **Status: MVP.** The core loop — research → store → evidence retrieval with
+> timestamped citations — works and is covered by offline tests (the network
+> path was also validated manually against real YouTube). It is deliberately
+> small. See [Limitations](#limitations) for what it is *not*.
 
 ## What it does
 
@@ -25,6 +31,9 @@ Claude Desktop, Cursor, Cline, or any MCP-compatible client.
    relevant passages from *everything ever ingested*, each with a deep link
    that opens the source video at the right moment
    (`https://youtu.be/VIDEO_ID?t=SECONDS`).
+4. **Retrieve evidence, source-aware.** The same retrieval, grouped by video
+   and channel — so a model (or you) can see whether the evidence comes from
+   genuinely different sources or from one channel repeated.
 
 No YouTube Data API key is required. Search uses `yt-dlp`; transcripts use
 `youtube-transcript-api` with a `yt-dlp` caption-download fallback.
@@ -32,45 +41,56 @@ No YouTube Data API key is required. Search uses `yt-dlp`; transcripts use
 ## Why
 
 Fetching one transcript is a solved problem — several tools do it. ytscholar's
-value is the **accumulation**: every ingest grows a persistent local knowledge
-base, and every search runs over all of it, returning evidence with precise,
-clickable sources. That makes it a small "research memory" you own — a SQLite
-file you can back up, inspect, or delete — instead of a one-shot fetcher.
+value is the **accumulation** and the **evidence layer**: every ingest grows a
+persistent local knowledge base, and retrieval returns evidence with precise,
+clickable sources plus source-diversity analysis. An LLM client can search for
+evidence, judge how independent the sources are, and pull a full transcript
+when it needs complete context — then do the actual reasoning itself. That
+makes ytscholar a small "research memory" you own: a SQLite file you can back
+up, inspect, or delete.
 
 ## Architecture
 
-Exactly what the code does today:
+Exactly what the code does today — ytscholar ends at evidence; the LLM client
+does the analysis:
 
 ```
-YouTube Search        yt-dlp ytsearch{N} — mirrors YouTube's own ranking
-        ↓
-Video Selection       hard cap per run (default 15); 30-day cache skips
-                      videos already learned
-        ↓
-Transcript Extraction youtube-transcript-api (primary)
+YouTube
+  ↓
+Video Discovery       yt-dlp ytsearch{N} (YouTube's own ranking);
+                      hard cap per run (default 15); 30-day cache
+  ↓
+Full Transcript       youtube-transcript-api (primary)
                       → yt-dlp caption download + VTT parse (fallback)
-        ↓
-Chunking              ~900-char chunks; each keeps the start timestamp of
-                      its first caption line
-        ↓
-Storage               SQLite (~/.ytscholar/knowledge.db): videos + chunks
-                      + FTS5 full-text index
-        ↓
-Search / Retrieval    FTS5 bm25 keyword ranking over the whole KB
-                      (optional semantic re-rank — experimental, see Search)
-        ↓
-Source + Timestamp    every hit returns youtu.be/ID?t=SECONDS
+  ↓
+┌─────────────────────┬───────────────────────────────────────────┐
+│ Full Transcript     │ Chunking (~900 chars; each chunk keeps    │
+│ Storage             │ its start timestamp) → FTS5 index         │
+└─────────────────────┴───────────────────────┬───────────────────┘
+                                                ↓
+Evidence Retrieval    passages + video/channel grouping
+                      (FTS5 bm25; optional experimental re-rank)
+                                                ↓
+LLM client            analysis + synthesis            ← not part of
+(Claude / GLM / …)    with verifiable citations       ytscholar
 ```
+
+ytscholar never discards the full transcript: chunking and FTS5 exist for
+*retrieval*; `get_transcript` always returns the complete stored text.
 
 ## Features
 
 Only what exists and works today:
 
-- 4 CLI commands: `research`, `transcript`, `search`, `stats`
-- 4 MCP tools over the same core: `research_topic`, `get_transcript`,
-  `search_knowledge`, `knowledge_stats`
+- 5 CLI commands: `research`, `transcript`, `search`, `evidence`, `stats`
+- 5 MCP tools over the same core: `research_topic`, `get_transcript`,
+  `search_knowledge`, `search_evidence`, `knowledge_stats`
 - Keyword retrieval via SQLite FTS5 with bm25 ranking; optional topic filter
-- Timestamped deep links on every search hit
+- **Evidence retrieval**: passages grouped by video and channel, with
+  `unique_channels`, `channel_distribution`, and an independence warning
+  (deterministic — channel variety only, no AI)
+- Full transcripts kept in the DB and retrievable at any time
+- Timestamped deep links on every search/evidence hit
 - Per-video failure isolation — one broken video never kills a research run
 - Politeness rails: hard per-run video cap, delay between requests, 30-day
   cache (no re-fetching what it already knows)
@@ -122,6 +142,9 @@ ytscholar-cli research "retrieval augmented generation" --max 5
 # Ask questions about everything learned so far:
 ytscholar-cli search "how does RAG reduce hallucinations"
 
+# Evidence with source/channel analysis (human-readable):
+ytscholar-cli evidence "how does RAG reduce hallucinations" --pretty
+
 # Get one video's transcript without storing it:
 ytscholar-cli transcript "https://youtu.be/VIDEO_ID" --text-only --no-store
 
@@ -158,6 +181,39 @@ Known search limitations (see also [Limitations](#limitations)): queries are
 matched as OR-ed words (no quoted-phrase support), and there is no synonym
 matching in keyword mode.
 
+### Evidence retrieval (v0.2)
+
+`ytscholar-cli evidence` / MCP `search_evidence` runs the **same** retrieval
+engine, then groups the hits so source diversity is visible:
+
+```json
+{
+  "passages": [
+    {
+      "video_id": "…", "title": "…", "channel": "…",
+      "start_seconds": 763.1,
+      "link": "https://youtu.be/…?t=763",
+      "text": "…passage text…", "score": 7.85
+    }
+  ],
+  "videos": [
+    { "video_id": "…", "title": "…", "channel": "…", "url": "…", "passages": 3 }
+  ],
+  "unique_channels": 2,
+  "channel_distribution": { "Channel A": 3, "Channel B": 1 },
+  "independent": false,
+  "warning": "3 of 4 matching videos come from the same channel ('Channel A'). Evidence may not be fully independent."
+}
+```
+
+The point: **N passages do not mean N sources.** If four matching videos come
+from two channels — three of them from the same one — the model should know
+that. `independent` is a deterministic channel-variety heuristic (`true` = no
+single channel holds a strict majority of the matching videos); it makes no
+stronger epistemic claim. Typical model workflow:
+`search_evidence(query)` → judge sources → `get_transcript(video_id)` for any
+source that needs full context → synthesize with citations.
+
 ## Research
 
 `research_topic(topic, max_videos)` does exactly this, in order:
@@ -190,7 +246,12 @@ Statuses you will see: `ingested`, `cached`, `no_transcript`, `error`.
 ## MCP
 
 An MCP server over stdio ships with the package (`ytscholar` command). Same
-four operations as the CLI, for use inside Claude Desktop, Cursor, Cline, …
+five operations as the CLI, for use inside Claude Desktop, Cursor, Cline, …
+(`research_topic`, `get_transcript`, `search_knowledge`, `search_evidence`,
+`knowledge_stats`). Designed for the model workflow:
+`research_topic` to ingest → `search_evidence` to find evidence and judge
+source diversity → `get_transcript(video_id)` when full context is needed →
+the model does the analysis and synthesis.
 
 Claude Desktop (`claude_desktop_config.json`):
 
@@ -230,6 +291,9 @@ Honest list for this MVP:
   well; Persian queries won't match English content.
 - **Semantic re-rank is experimental** — implemented, off by default, not
   covered by tests.
+- **`independent` in evidence retrieval is a heuristic**: it reflects channel
+  variety only (same-creator concentration), not true epistemic independence
+  — two channels may still repeat the same primary source.
 - `get_transcript` returns the **full** transcript text; for very long videos
   this is a large payload for an LLM context.
 - A single-video `transcript` stores the URL you passed as the video *title*
@@ -245,6 +309,8 @@ Honest list for this MVP:
 
 Not implemented — kept deliberately out of this MVP:
 
+- Claim extraction, contradiction detection, source lineage, evidence graphs
+  (these are the LLM client's job; future versions may assist with them)
 - Quoted-phrase queries and per-video diversity in search results
 - Real title/metadata enrichment for single-video transcripts; transcript
   length caps for LLM consumption
