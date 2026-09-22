@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+
+# ytscholar local knowledge base (may contain lots of data)
+*.db
+*.db-wal
+*.db-shm
+.ytscholar/
+
+# OS
+.DS_Store

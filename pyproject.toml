@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ytscholar"
+version = "0.1.0"
+description = "A self-learning YouTube research agent, exposed as an MCP server: pull transcripts from the top videos on a topic, grow a local knowledge base, and answer questions from it."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Elahe" }]
+keywords = ["mcp", "youtube", "transcript", "rag", "agent", "research"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+# Core deps kept intentionally light so `pip install ytscholar` is fast and
+# works everywhere. Semantic embeddings are an optional extra (see below),
+# because sentence-transformers pulls in torch (hundreds of MB).
+dependencies = [
+    "mcp>=1.28,<2",             # MCP server SDK (v1 line = broad client compatibility)
+    "youtube-transcript-api>=1.0.0",
+    "yt-dlp>=2024.1.1",
+]
+
+[project.optional-dependencies]
+# Semantic RAG. Without this the KB still works via SQLite FTS5 keyword search.
+embeddings = ["sentence-transformers>=2.2.0", "numpy>=1.24"]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+# The MCP server entrypoint (stdio). This is what Claude Desktop / Cursor launch.
+ytscholar = "ytscholar.server:main"
+# A small CLI so you can use / test the agent without any MCP client.
+ytscholar-cli = "ytscholar.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Elahe-z/ytscholar"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ytscholar"]
