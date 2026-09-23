@@ -121,7 +121,10 @@ def search_knowledge(query: str, k: int = 5, topic: str = "") -> dict:
         k: Number of passages to return.
         topic: Optional filter to a topic previously passed to research_topic.
     """
-    return agent().search_knowledge(query, k=k, topic=(topic or None))
+    try:
+        return agent().search_knowledge(query, k=k, topic=(topic or None))
+    except Exception as exc:  # noqa: BLE001 - tool boundary
+        return _tool_error(exc)
 
 
 @mcp.tool()
@@ -137,6 +140,11 @@ def search_evidence(query: str, k: int = 6, topic: str = "") -> dict:
     in a single channel. Several passages may come from the same video or
     channel — do not count them as independent sources.
 
+    Those figures describe the k returned passages, not every stored match:
+    total_matching_videos reports how many videos match the query overall, so
+    when it exceeds the number of videos listed here, raise k before drawing
+    conclusions about source diversity.
+
     Use this tool to find where the evidence is; use get_transcript(video_id)
     when you need the full transcript of a source for deeper analysis.
 
@@ -145,14 +153,20 @@ def search_evidence(query: str, k: int = 6, topic: str = "") -> dict:
         k: Number of passages to return.
         topic: Optional filter to a topic previously passed to research_topic.
     """
-    return agent().search_evidence(query, k=k, topic=(topic or None))
+    try:
+        return agent().search_evidence(query, k=k, topic=(topic or None))
+    except Exception as exc:  # noqa: BLE001 - tool boundary
+        return _tool_error(exc)
 
 
 @mcp.tool()
 def knowledge_stats() -> dict:
     """Report what the agent has learned so far: videos, chunks, topics, and
     whether semantic embeddings are active. Useful to check memory state."""
-    return agent().stats()
+    try:
+        return agent().stats()
+    except Exception as exc:  # noqa: BLE001 - tool boundary
+        return _tool_error(exc)
 
 
 def main() -> None:

@@ -23,8 +23,8 @@ def _print_evidence(res) -> None:
     """Human-readable evidence report (default CLI output stays JSON)."""
     print(f"Query: {res['query']}")
     print()
-    print(f"Matching passages: {len(res['passages'])}")
-    print(f"Videos: {len(res['videos'])}")
+    print(f"Matching passages: {len(res['passages'])} (k={res['k']})")
+    print(f"Videos: {len(res['videos'])} of {res['total_matching_videos']} matching")
     print(f"Unique channels: {res['unique_channels']}")
     print()
     print("Channel distribution:")

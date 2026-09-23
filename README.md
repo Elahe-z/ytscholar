@@ -97,8 +97,9 @@ Only what exists and works today:
 - Proxy and browser-cookie support for restricted networks (validated against
   a real filtered-network setup)
 - Clean, actionable CLI errors instead of tracebacks
-- Offline test suite (15 tests: URL/VTT parsing, chunking, storage, FTS
-  retrieval, cache freshness, topic filter) + CI on Python 3.10–3.12
+- Offline test suite (34 tests: URL/VTT parsing, chunking, storage, metadata
+  merging, FTS retrieval, cache freshness, topic filter, evidence grouping,
+  semantic re-rank plumbing) + CI on Python 3.10–3.12
 
 ## Installation
 
@@ -174,8 +175,17 @@ Search is **keyword-based by default**:
 `pip install "ytscholar[embeddings]"` (pulls in `torch`, hundreds of MB) and
 `YTSCHOLAR_EMBEDDINGS=1`, chunks are embedded at ingest time and query
 vectors re-rank the FTS candidates by cosine similarity. This path is
-implemented but **experimental: it is not covered by the test suite** and is
-disabled by default. Without it, everything works via plain keyword search.
+disabled by default; without it everything works via plain keyword search.
+It is still **experimental**: the re-rank plumbing (vector packing, the cosine
+ranking, and its fallbacks) is covered by tests that inject a stand-in
+embedder, but no test exercises a real sentence-transformers model, and
+retrieval quality with one has not been measured.
+
+One behaviour to know about in a mixed knowledge base: chunks stored *before*
+embeddings were enabled carry no vector, and the re-rank ranks only vectorised
+chunks — so older material drops out of the ranking until it is re-ingested.
+(If nothing in the candidate pool has a vector, search falls back to the
+keyword ranking intact.)
 
 Known search limitations (see also [Limitations](#limitations)): queries are
 matched as OR-ed words (no quoted-phrase support), and there is no synonym
@@ -201,16 +211,25 @@ engine, then groups the hits so source diversity is visible:
   ],
   "unique_channels": 2,
   "channel_distribution": { "Channel A": 3, "Channel B": 1 },
+  "total_matching_videos": 9,
+  "k": 6,
   "independent": false,
-  "warning": "3 of 4 matching videos come from the same channel ('Channel A'). Evidence may not be fully independent."
+  "warning": "3 of 4 videos behind these passages come from the same channel ('Channel A'). Evidence may not be fully independent. These figures describe the top 6 passages only: 9 videos match this query in total. Raise k to judge source diversity over the full match set."
 }
 ```
 
 The point: **N passages do not mean N sources.** If four matching videos come
 from two channels — three of them from the same one — the model should know
 that. `independent` is a deterministic channel-variety heuristic (`true` = no
-single channel holds a strict majority of the matching videos); it makes no
-stronger epistemic claim. Typical model workflow:
+single channel holds a strict majority of the videos behind the returned
+passages); it makes no stronger epistemic claim.
+
+**The diversity figures describe the top-`k` window, not the whole knowledge
+base.** Grouping runs over the `k` passages actually returned, so a small `k`
+can make a diverse match set look concentrated (or the reverse).
+`total_matching_videos` reports how many videos match the query in total; when
+it exceeds the number of videos listed, the `warning` says so and raising `k`
+gives a fuller picture. Typical model workflow:
 `search_evidence(query)` → judge sources → `get_transcript(video_id)` for any
 source that needs full context → synthesize with citations.
 
@@ -289,15 +308,20 @@ Honest list for this MVP:
 - **Keyword search only** (by default): OR-ed word tokens, no phrase
   support, no synonyms. English queries against English transcripts work
   well; Persian queries won't match English content.
-- **Semantic re-rank is experimental** — implemented, off by default, not
-  covered by tests.
+- **Semantic re-rank is experimental** — implemented and off by default. Its
+  plumbing is tested with a stand-in embedder, but no real model is exercised
+  and retrieval quality is unmeasured.
 - **`independent` in evidence retrieval is a heuristic**: it reflects channel
   variety only (same-creator concentration), not true epistemic independence
-  — two channels may still repeat the same primary source.
+  — two channels may still repeat the same primary source. It is also
+  computed over the `k` returned passages, not the full match set; see
+  `total_matching_videos`.
 - `get_transcript` returns the **full** transcript text; for very long videos
   this is a large payload for an LLM context.
-- A single-video `transcript` stores the URL you passed as the video *title*
-  in the knowledge base (real title enrichment is not implemented).
+- A single-video `transcript` looks the real title/channel up via `yt-dlp`
+  (one extra request, only when storing). If that lookup fails it stores the
+  video with no title rather than guessing — and never overwrites metadata a
+  previous richer ingest already recorded.
 - The `topic` filter is an exact, case-sensitive match on the string passed
   to `research`.
 - Ingest relies on scraping (`yt-dlp` / `youtube-transcript-api`): YouTube
@@ -312,9 +336,9 @@ Not implemented — kept deliberately out of this MVP:
 - Claim extraction, contradiction detection, source lineage, evidence graphs
   (these are the LLM client's job; future versions may assist with them)
 - Quoted-phrase queries and per-video diversity in search results
-- Real title/metadata enrichment for single-video transcripts; transcript
-  length caps for LLM consumption
-- Validate and test the embeddings path; make semantic mode first-class
+- Transcript length caps for LLM consumption
+- Validate the embeddings path against a real model (quality, not just
+  plumbing) and make semantic mode first-class
 - Optional tiny HTTP API over the same core, for workflow tools (n8n etc.)
 - Publish to PyPI (`pip install ytscholar`)
 
@@ -355,7 +379,7 @@ Or export a `cookies.txt` (browser extension) and set
 
 ```bash
 pip install -e ".[dev]"
-pytest -q          # offline tests only — no network needed
+pytest -q          # 34 offline tests — no network, no heavy deps needed
 ```
 
 CI (`.github/workflows/ci.yml`) runs this suite on Python 3.10–3.12 for every

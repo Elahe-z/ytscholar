@@ -4,4 +4,4 @@ Public surface is intentionally small; most callers use the MCP server
 (``ytscholar.server``) or the CLI (``ytscholar.cli``).
 """
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"

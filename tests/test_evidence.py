@@ -129,3 +129,36 @@ def test_empty_result_is_clean():
     assert res["videos"] == []
     assert res["unique_channels"] == 0
     assert res["warning"] is None
+
+
+# Item: source-diversity figures describe the top-k window, not the whole KB.
+
+
+def test_evidence_reports_match_coverage():
+    kb = _kb()
+    for i, ch in enumerate(["Chan A", "Chan B", "Chan C", "Chan D"]):
+        _ingest(kb, f"vid0000006{i}", ch, "eta evidence")
+    # k=2 can only see two of the four matching videos.
+    res = kb.search_evidence("eta", k=2)
+    assert res["k"] == 2
+    assert len(res["videos"]) == 2
+    assert res["total_matching_videos"] == 4
+    assert res["warning"] and "4 videos match this query in total" in res["warning"]
+
+    # With k wide enough, the window covers the match set and the caveat goes.
+    full = kb.search_evidence("eta", k=10)
+    assert full["total_matching_videos"] == 4
+    assert len(full["videos"]) == 4
+    assert full["warning"] is None
+    assert full["independent"] is True
+
+
+def test_coverage_caveat_appends_to_a_concentration_warning():
+    kb = _kb()
+    _ingest(kb, "vid00000071", "Chan A", "theta one")
+    _ingest(kb, "vid00000072", "Chan A", "theta two")
+    _ingest(kb, "vid00000073", "Chan B", "theta three")
+    res = kb.search_evidence("theta", k=2)
+    assert res["total_matching_videos"] == 3
+    assert "same channel" in res["warning"]
+    assert "3 videos match this query in total" in res["warning"]

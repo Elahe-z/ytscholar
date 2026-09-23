@@ -159,6 +159,44 @@ def search_videos(
     return results
 
 
+def fetch_video_meta(
+    video_id: str,
+    proxy: Optional[str] = None,
+    cookies_from_browser: Optional[str] = None,
+    cookies_file: Optional[str] = None,
+) -> Optional[VideoMeta]:
+    """Look up title/channel/duration for a single video. Best effort.
+
+    Returns None on any failure: this is enrichment, never a hard requirement.
+    Callers must stay usable when YouTube only hands over the captions.
+    """
+    try:
+        import yt_dlp
+
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "noplaylist": True,
+        }
+        if proxy:
+            opts["proxy"] = proxy
+        _apply_cookie_opts(opts, cookies_from_browser, cookies_file)
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(video_url(video_id), download=False) or {}
+    except Exception as exc:  # noqa: BLE001 - enrichment must never fail a call
+        log.info("metadata lookup failed for %s (%s)", video_id, exc)
+        return None
+    return VideoMeta(
+        video_id=video_id,
+        title=info.get("title") or "",
+        url=video_url(video_id),
+        channel=info.get("channel") or info.get("uploader") or "",
+        duration=info.get("duration"),
+        view_count=info.get("view_count"),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Transcript fetch — primary path (youtube-transcript-api)
 # ---------------------------------------------------------------------------

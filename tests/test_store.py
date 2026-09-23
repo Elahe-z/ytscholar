@@ -73,3 +73,50 @@ def test_topic_filter():
         )
     hits = kb.search("apples", k=5, topic="a")
     assert all(h.video_id == "vid00000010" for h in hits)
+
+
+def test_reingest_keeps_richer_metadata():
+    """A single-video `transcript` call knows only the id. Re-ingesting must
+    not wipe the real title/channel/topic a research run already recorded."""
+    kb = _kb()
+    rich = VideoMeta(
+        video_id="vid00000020",
+        title="Intro to HNSW",
+        url="https://www.youtube.com/watch?v=vid00000020",
+        channel="Real Channel",
+        duration=600,
+        view_count=1234,
+    )
+    t = Transcript(video_id="vid00000020", language_code="en", is_generated=True,
+                   snippets=[Snippet(text="first pass", start=0.0)])
+    kb.add_transcript(rich, t, topic="vector-db")
+
+    bare = VideoMeta(video_id="vid00000020", title="", url="", channel="")
+    t2 = Transcript(video_id="vid00000020", language_code="en", is_generated=True,
+                    snippets=[Snippet(text="second pass", start=0.0)])
+    kb.add_transcript(bare, t2, topic="")
+
+    row = kb.list_videos()[0]
+    assert row["title"] == "Intro to HNSW"
+    assert row["channel"] == "Real Channel"
+    assert row["topic"] == "vector-db"
+    assert row["view_count"] == 1234
+
+
+def test_reingest_prefers_new_metadata_when_present():
+    """Preservation must not freeze stale values: real new data always wins."""
+    kb = _kb()
+    t = Transcript(video_id="vid00000021", language_code="en", is_generated=True,
+                   snippets=[Snippet(text="x", start=0.0)])
+    kb.add_transcript(
+        VideoMeta(video_id="vid00000021", title="Old", url="u", channel="Old Ch"),
+        t, topic="old-topic",
+    )
+    kb.add_transcript(
+        VideoMeta(video_id="vid00000021", title="New", url="u2", channel="New Ch"),
+        t, topic="new-topic",
+    )
+    row = kb.list_videos()[0]
+    assert row["title"] == "New"
+    assert row["channel"] == "New Ch"
+    assert row["topic"] == "new-topic"

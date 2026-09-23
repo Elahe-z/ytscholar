@@ -55,17 +55,30 @@ class Agent:
             cookies_from_browser=self.config.cookies_from_browser or None,
             cookies_file=self.config.cookies_file or None,
         )
-        meta = youtube.VideoMeta(
-            video_id=t.video_id,
-            title=video,
-            url=youtube.video_url(t.video_id),
-        )
+        meta = None
+        if store:
+            # Look up the real title/channel so the KB doesn't end up with the
+            # raw URL standing in for a title. Best effort: None on failure,
+            # and the store then keeps whatever metadata it already had.
+            meta = youtube.fetch_video_meta(
+                t.video_id,
+                proxy=self.config.proxy_url(),
+                cookies_from_browser=self.config.cookies_from_browser or None,
+                cookies_file=self.config.cookies_file or None,
+            )
+        if meta is None:
+            meta = youtube.VideoMeta(
+                video_id=t.video_id,
+                title="",
+                url=youtube.video_url(t.video_id),
+            )
         stored_chunks = 0
         if store:
-            # Enrich metadata cheaply via search is overkill; store as-is.
             stored_chunks = self.kb.add_transcript(meta, t, topic="")
         return {
             "video_id": t.video_id,
+            "title": meta.title,
+            "channel": meta.channel,
             "language": t.language_code,
             "is_generated": t.is_generated,
             "source": t.source,

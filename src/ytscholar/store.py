@@ -165,14 +165,25 @@ class _Embedder:
 
 
 def _pack(vec) -> bytes:
-    return struct.pack(f"<{len(vec)}f", *[float(x) for x in vec])
+    vals = [float(x) for x in vec]
+    return struct.pack(f"<{len(vals)}f", *vals)
 
 
-def _unpack(blob: bytes):
-    import numpy as np
-
+def _unpack(blob: bytes) -> tuple[float, ...]:
+    """Decode a stored vector. Pure stdlib on purpose: retrieval must work
+    (and be testable) without numpy installed."""
     n = len(blob) // 4
-    return np.array(struct.unpack(f"<{n}f", blob), dtype="float32")
+    return struct.unpack(f"<{n}f", blob)
+
+
+def _dot(a, b) -> float:
+    """Dot product of two equal-length float sequences.
+
+    Both sides are L2-normalized at encode time, so this *is* cosine
+    similarity. Candidate pools are small (tens of vectors), so a plain
+    Python loop is fast enough and keeps numpy out of the search path.
+    """
+    return float(sum(float(x) * float(y) for x, y in zip(a, b)))
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +192,15 @@ def _unpack(blob: bytes):
 
 
 class KnowledgeBase:
-    def __init__(self, config: Config, db_path: Optional[Path] = None):
+    def __init__(
+        self,
+        config: Config,
+        db_path: Optional[Path] = None,
+        embedder: Optional["_Embedder"] = None,
+    ):
+        """``embedder`` overrides the config-driven one. It only has to expose
+        ``available: bool`` and ``encode(list[str]) -> sequence of vectors``,
+        which is what the tests inject instead of pulling in torch."""
         self.config = config
         self.db_path = Path(db_path) if db_path else config.db_path
         if str(self.db_path) != ":memory:":
@@ -192,9 +211,12 @@ class KnowledgeBase:
         self.conn.execute("PRAGMA foreign_keys=ON;")
         self.conn.executescript(_SCHEMA)
         self.conn.commit()
-        self._embedder = (
-            _Embedder(config.embed_model) if config.use_embeddings else None
-        )
+        if embedder is not None:
+            self._embedder = embedder
+        else:
+            self._embedder = (
+                _Embedder(config.embed_model) if config.use_embeddings else None
+            )
 
     def close(self) -> None:
         self.conn.close()
@@ -214,7 +236,13 @@ class KnowledgeBase:
     def add_transcript(
         self, meta: VideoMeta, transcript: Transcript, topic: str = ""
     ) -> int:
-        """Store (or replace) a video + its chunked transcript. Returns #chunks."""
+        """Store (or replace) a video + its chunked transcript. Returns #chunks.
+
+        Metadata is merged rather than blindly overwritten: a re-ingest that
+        carries no title/channel/topic (a single-video ``transcript`` call,
+        which knows nothing but the id) keeps whatever a richer earlier ingest
+        already recorded. Non-empty incoming values always win.
+        """
         full_text = transcript.to_text()
         chunks = chunk_snippets(transcript.snippets, self.config.chunk_chars)
 
@@ -226,6 +254,25 @@ class KnowledgeBase:
                 log.warning("embedding failed, storing without vectors: %s", exc)
 
         cur = self.conn.cursor()
+        prev = self.conn.execute(
+            "SELECT title, channel, url, topic, duration, view_count"
+            " FROM videos WHERE video_id = ?",
+            (meta.video_id,),
+        ).fetchone()
+
+        def _keep(new_value, column: str):
+            """Prefer the new value; fall back to what we already stored."""
+            if new_value not in (None, ""):
+                return new_value
+            return prev[column] if prev is not None else new_value
+
+        title = _keep(meta.title, "title")
+        channel = _keep(meta.channel, "channel")
+        url = _keep(meta.url, "url")
+        topic = _keep(topic, "topic")
+        duration = _keep(meta.duration, "duration")
+        view_count = _keep(meta.view_count, "view_count")
+
         cur.execute("DELETE FROM videos WHERE video_id = ?", (meta.video_id,))
         cur.execute("DELETE FROM chunks WHERE video_id = ?", (meta.video_id,))
         cur.execute(
@@ -235,13 +282,13 @@ class KnowledgeBase:
                VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 meta.video_id,
-                meta.title,
-                meta.channel,
-                meta.url,
+                title,
+                channel,
+                url,
                 topic,
                 transcript.language_code,
-                meta.duration,
-                meta.view_count,
+                duration,
+                view_count,
                 int(transcript.is_generated),
                 time.time(),
                 full_text,
@@ -303,15 +350,13 @@ class KnowledgeBase:
         # Semantic re-rank if we can.
         if self._embedder and self._embedder.available:
             try:
-                import numpy as np
-
                 qv = self._embedder.encode([query])[0]
                 scored = []
                 for r in rows:
                     if r["embedding"] is None:
                         continue
                     v = _unpack(r["embedding"])
-                    sim = float(np.dot(qv, v))  # both normalized => cosine
+                    sim = _dot(qv, v)  # both normalized => cosine
                     scored.append((sim, r))
                 if scored:
                     scored.sort(key=lambda x: x[0], reverse=True)
@@ -343,6 +388,25 @@ class KnowledgeBase:
         ]
         return hits
 
+    def count_matching_videos(self, query: str, topic: Optional[str] = None) -> int:
+        """How many distinct videos match ``query`` at all, ignoring any k.
+
+        Evidence grouping only ever sees the top-k passages; this is what tells
+        a caller whether that window covers the match set or just a slice of it.
+        """
+        sql = """
+            SELECT COUNT(DISTINCT c.video_id) AS n
+            FROM chunks_fts
+            JOIN chunks c ON c.id = chunks_fts.rowid
+            JOIN videos v ON v.video_id = c.video_id
+            WHERE chunks_fts MATCH ?
+        """
+        params: list = [self._fts_query(query)]
+        if topic:
+            sql += " AND v.topic = ?"
+            params.append(topic)
+        return int(self.conn.execute(sql, params).fetchone()["n"])
+
     # -- evidence retrieval (v0.2) ------------------------------------------
 
     def search_evidence(
@@ -356,9 +420,13 @@ class KnowledgeBase:
 
         ``independent`` is a deterministic channel-variety heuristic only:
         True means no single channel accounts for a strict majority of the
-        matching videos. It is not an epistemic guarantee of independence.
+        videos *behind the returned passages*. It is therefore a property of
+        this top-k window, not of the whole match set — ``total_matching_videos``
+        reports how much of that set the window actually covers. It is not an
+        epistemic guarantee of independence either way.
         """
         hits = self.search(query, k=k, topic=topic)
+        total_matching_videos = self.count_matching_videos(query, topic=topic)
 
         videos: dict[str, dict] = {}
         channel_videos: dict[str, set] = {}
@@ -388,24 +456,34 @@ class KnowledgeBase:
             if unique_channels == 1:
                 independent = False
                 warning = (
-                    f"All {n_videos} matching videos come from the same channel "
-                    f"('{dominant_channel}'). Evidence may not be independent."
+                    f"All {n_videos} videos behind these passages come from the "
+                    f"same channel ('{dominant_channel}'). Evidence may not be "
+                    "independent."
                 )
             elif dominant_n > n_videos - dominant_n:
                 independent = False
                 warning = (
-                    f"{dominant_n} of {n_videos} matching videos come from the "
-                    f"same channel ('{dominant_channel}'). Evidence may not be "
-                    "fully independent."
+                    f"{dominant_n} of {n_videos} videos behind these passages "
+                    f"come from the same channel ('{dominant_channel}'). "
+                    "Evidence may not be fully independent."
                 )
             else:
                 independent = True
+            if total_matching_videos > n_videos:
+                truncated = (
+                    f"These figures describe the top {len(hits)} passages only: "
+                    f"{total_matching_videos} videos match this query in total. "
+                    "Raise k to judge source diversity over the full match set."
+                )
+                warning = f"{warning} {truncated}" if warning else truncated
 
         return {
+            "k": k,
             "passages": [h.to_dict() for h in hits],
             "videos": list(videos.values()),
             "unique_channels": unique_channels,
             "channel_distribution": channel_distribution,
+            "total_matching_videos": total_matching_videos,
             "independent": independent,
             "warning": warning,
         }
