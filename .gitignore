@@ -20,5 +20,6 @@ venv/
 # Local editor/agent tool configs
 .zcodeignore/
 .zcodeignore
+.zcode/
 .vscode/
 .idea/
