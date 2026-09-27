@@ -10,13 +10,22 @@ Or during development:
 
 IMPORTANT: for a stdio MCP server, stdout is the protocol channel. All logging
 must go to stderr, otherwise it corrupts the JSON-RPC stream.
+
+IMPORTANT: tool functions must be ``async`` and offload the (synchronous,
+network-bound) agent calls to a worker thread via ``anyio.to_thread``. The MCP
+SDK executes synchronous tool functions directly on the server's event loop,
+so one long research call would otherwise block the loop and every other tool
+call — including light ones like knowledge_stats — would queue behind it
+until the client times out (observed and reproduced with real clients).
 """
 from __future__ import annotations
 
 import logging
 import sys
+import threading
 from typing import Optional
 
+import anyio
 from mcp.server.fastmcp import FastMCP
 
 from .agent import Agent, NETWORK_HINT
@@ -32,15 +41,20 @@ log = logging.getLogger("ytscholar.server")
 
 mcp = FastMCP("ytscholar")
 
-# One shared agent (and therefore one KB connection) for the process lifetime.
+# One shared agent for the process lifetime. Tools run in worker threads (see
+# module docstring), so lazy init is guarded; the KnowledgeBase hands each
+# thread its own SQLite connection.
 _agent: Optional[Agent] = None
+_agent_lock = threading.Lock()
 
 
 def agent() -> Agent:
     global _agent
     if _agent is None:
-        _agent = Agent()
-        log.info("ytscholar agent ready. KB: %s", _agent.config.db_path)
+        with _agent_lock:
+            if _agent is None:
+                _agent = Agent()
+                log.info("ytscholar agent ready. KB: %s", _agent.config.db_path)
     return _agent
 
 
@@ -53,8 +67,16 @@ def _tool_error(exc: Exception) -> dict:
     return out
 
 
+async def _run(fn):
+    """Run a sync agent call off the event loop and normalize its errors."""
+    try:
+        return await anyio.to_thread.run_sync(fn)
+    except Exception as exc:  # noqa: BLE001 - tool boundary
+        return _tool_error(exc)
+
+
 @mcp.tool()
-def get_transcript(
+async def get_transcript(
     video: str,
     languages: str = "",
     translate_to: str = "",
@@ -74,25 +96,27 @@ def get_transcript(
     Returns a dict with the plain-text transcript, language, and metadata.
     """
     langs = [s.strip() for s in languages.split(",") if s.strip()] or None
-    try:
-        return agent().transcript(
-            video,
-            languages=langs,
-            translate_to=(translate_to or None),
-            store=store,
-        )
-    except Exception as exc:  # noqa: BLE001 - tool boundary
-        return _tool_error(exc)
+    a = agent()
+    return await _run(lambda: a.transcript(
+        video,
+        languages=langs,
+        translate_to=(translate_to or None),
+        store=store,
+    ))
 
 
 @mcp.tool()
-def research_topic(topic: str, max_videos: int = 5, languages: str = "") -> dict:
+async def research_topic(topic: str, max_videos: int = 5, languages: str = "") -> dict:
     """Research a topic by mining the transcripts of the top YouTube videos.
 
     Searches YouTube for the topic, takes the top `max_videos` results, pulls
     each transcript, and ingests them into the agent's growing knowledge base.
     This is how the agent "learns" a subject. Use `search_knowledge` afterward
     to ask questions grounded in what was ingested.
+
+    Note: on slow networks this can take minutes (one transcript fetch per
+    video). Prefer small `max_videos` (1–3) there; the call keeps running
+    server-side even if the client times out, and results still get ingested.
 
     Args:
         topic: The subject to research, e.g. "retrieval augmented generation".
@@ -102,14 +126,14 @@ def research_topic(topic: str, max_videos: int = 5, languages: str = "") -> dict
     Returns a per-video ingestion report plus updated knowledge-base stats.
     """
     langs = [s.strip() for s in languages.split(",") if s.strip()] or None
-    try:
-        return agent().research_topic(topic, max_videos=max_videos, languages=langs)
-    except Exception as exc:  # noqa: BLE001 - tool boundary
-        return _tool_error(exc)
+    a = agent()
+    return await _run(lambda: a.research_topic(
+        topic, max_videos=max_videos, languages=langs
+    ))
 
 
 @mcp.tool()
-def search_knowledge(query: str, k: int = 5, topic: str = "") -> dict:
+async def search_knowledge(query: str, k: int = 5, topic: str = "") -> dict:
     """Semantic/keyword search over everything the agent has already learned.
 
     Retrieves the most relevant transcript passages from the local knowledge
@@ -121,14 +145,12 @@ def search_knowledge(query: str, k: int = 5, topic: str = "") -> dict:
         k: Number of passages to return.
         topic: Optional filter to a topic previously passed to research_topic.
     """
-    try:
-        return agent().search_knowledge(query, k=k, topic=(topic or None))
-    except Exception as exc:  # noqa: BLE001 - tool boundary
-        return _tool_error(exc)
+    a = agent()
+    return await _run(lambda: a.search_knowledge(query, k=k, topic=(topic or None)))
 
 
 @mcp.tool()
-def search_evidence(query: str, k: int = 6, topic: str = "") -> dict:
+async def search_evidence(query: str, k: int = 6, topic: str = "") -> dict:
     """Retrieve evidence passages relevant to a query from the stored
     transcripts, together with source analysis.
 
@@ -153,20 +175,16 @@ def search_evidence(query: str, k: int = 6, topic: str = "") -> dict:
         k: Number of passages to return.
         topic: Optional filter to a topic previously passed to research_topic.
     """
-    try:
-        return agent().search_evidence(query, k=k, topic=(topic or None))
-    except Exception as exc:  # noqa: BLE001 - tool boundary
-        return _tool_error(exc)
+    a = agent()
+    return await _run(lambda: a.search_evidence(query, k=k, topic=(topic or None)))
 
 
 @mcp.tool()
-def knowledge_stats() -> dict:
+async def knowledge_stats() -> dict:
     """Report what the agent has learned so far: videos, chunks, topics, and
     whether semantic embeddings are active. Useful to check memory state."""
-    try:
-        return agent().stats()
-    except Exception as exc:  # noqa: BLE001 - tool boundary
-        return _tool_error(exc)
+    a = agent()
+    return await _run(lambda: a.stats())
 
 
 def main() -> None:

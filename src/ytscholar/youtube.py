@@ -110,12 +110,31 @@ def _apply_cookie_opts(
         opts["cookiesfrombrowser"] = (cookies_from_browser,)
 
 
+def _timeout_session(timeout_s: float):
+    """A requests.Session that applies a default timeout to every request.
+
+    youtube-transcript-api issues its HTTP calls without any timeout, which
+    on a dead proxy connection can hang a tool call indefinitely. Passing a
+    session that injects a default bounds every request it makes. (requests
+    is already a dependency via youtube-transcript-api.)
+    """
+    import requests
+
+    class _TimeoutSession(requests.Session):
+        def request(self, method, url, **kwargs):
+            kwargs.setdefault("timeout", timeout_s)
+            return super().request(method, url, **kwargs)
+
+    return _TimeoutSession()
+
+
 def search_videos(
     query: str,
     limit: int = 5,
     proxy: Optional[str] = None,
     cookies_from_browser: Optional[str] = None,
     cookies_file: Optional[str] = None,
+    timeout: float = 30.0,
 ) -> list[VideoMeta]:
     """Return up to ``limit`` top videos for ``query`` using yt-dlp search.
 
@@ -133,6 +152,7 @@ def search_videos(
         "extract_flat": True,
         "default_search": "ytsearch",
         "noplaylist": True,
+        "socket_timeout": timeout,
     }
     if proxy:
         opts["proxy"] = proxy
@@ -164,6 +184,7 @@ def fetch_video_meta(
     proxy: Optional[str] = None,
     cookies_from_browser: Optional[str] = None,
     cookies_file: Optional[str] = None,
+    timeout: float = 30.0,
 ) -> Optional[VideoMeta]:
     """Look up title/channel/duration for a single video. Best effort.
 
@@ -178,6 +199,7 @@ def fetch_video_meta(
             "no_warnings": True,
             "skip_download": True,
             "noplaylist": True,
+            "socket_timeout": timeout,
         }
         if proxy:
             opts["proxy"] = proxy
@@ -226,13 +248,16 @@ def _fetch_via_api(
     languages: list[str],
     translate_to: Optional[str] = None,
     proxies: Optional[dict] = None,
+    timeout: float = 30.0,
 ) -> Transcript:
     """Fetch a transcript using youtube-transcript-api.
 
     Handles both the modern instance API (v1.x: ``.fetch`` / ``.list``) and the
     legacy classmethod API (<1.0: ``.get_transcript`` / ``.list_transcripts``),
     so the package keeps working across library versions. ``proxies`` (a
-    requests-style dict) routes traffic where YouTube is filtered.
+    requests-style dict) routes traffic where YouTube is filtered. The session
+    carries a per-request ``timeout`` so a dead connection cannot hang the
+    call indefinitely.
     """
     from youtube_transcript_api import YouTubeTranscriptApi
 
@@ -242,10 +267,9 @@ def _fetch_via_api(
     if hasattr(YouTubeTranscriptApi, "fetch") or hasattr(
         YouTubeTranscriptApi(), "fetch"
     ):
-        api = (
-            YouTubeTranscriptApi(proxy_config=proxy_config)
-            if proxy_config is not None
-            else YouTubeTranscriptApi()
+        api = YouTubeTranscriptApi(
+            proxy_config=proxy_config,
+            http_client=_timeout_session(timeout),
         )
         if translate_to:
             transcript_list = api.list(video_id)
@@ -364,6 +388,7 @@ def _fetch_via_ytdlp(
     proxy: Optional[str] = None,
     cookies_from_browser: Optional[str] = None,
     cookies_file: Optional[str] = None,
+    timeout: float = 30.0,
 ) -> Transcript:
     """Fallback: let yt-dlp download the caption track, then parse the VTT."""
     import yt_dlp
@@ -380,6 +405,7 @@ def _fetch_via_ytdlp(
             "subtitlesformat": "vtt",
             "outtmpl": outtmpl,
             "noplaylist": True,
+            "socket_timeout": timeout,
         }
         if proxy:
             opts["proxy"] = proxy
@@ -427,13 +453,15 @@ def get_transcript(
     proxy_url: Optional[str] = None,
     cookies_from_browser: Optional[str] = None,
     cookies_file: Optional[str] = None,
+    timeout: float = 30.0,
 ) -> Transcript:
     """Fetch a transcript for a video (URL or id), trying API then yt-dlp.
 
     ``proxies`` is a requests-style dict for youtube-transcript-api; ``proxy_url``
     is a single URL for the yt-dlp fallback. ``cookies_from_browser`` /
     ``cookies_file`` let the yt-dlp fallback pass YouTube's bot check. All
-    optional (for filtered regions / VPN IPs).
+    optional (for filtered regions / VPN IPs). ``timeout`` bounds each
+    underlying network request (default 30s).
 
     Raises TranscriptUnavailable with a human-readable reason on total failure.
     """
@@ -442,7 +470,9 @@ def get_transcript(
     errors: list[str] = []
 
     try:
-        return _fetch_via_api(video_id, langs, translate_to=translate_to, proxies=proxies)
+        return _fetch_via_api(
+            video_id, langs, translate_to=translate_to, proxies=proxies, timeout=timeout
+        )
     except Exception as exc:  # noqa: BLE001 - we want to try the fallback
         errors.append(f"transcript-api: {type(exc).__name__}: {exc}")
         log.info("primary transcript fetch failed for %s (%s)", video_id, exc)
@@ -455,6 +485,7 @@ def get_transcript(
                 proxy=proxy_url,
                 cookies_from_browser=cookies_from_browser,
                 cookies_file=cookies_file,
+                timeout=timeout,
             )
         except Exception as exc:  # noqa: BLE001
             errors.append(f"yt-dlp: {type(exc).__name__}: {exc}")

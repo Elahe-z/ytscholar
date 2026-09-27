@@ -18,6 +18,7 @@ import json
 import logging
 import sqlite3
 import struct
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -142,6 +143,7 @@ class _Embedder:
     def __init__(self, model_name: str):
         self.model_name = model_name
         self._model = None
+        self._model_lock = threading.Lock()
         self.available = False
         try:  # keep import cost + failure local
             import numpy  # noqa: F401
@@ -152,12 +154,13 @@ class _Embedder:
             log.info("embeddings disabled (%s). Falling back to FTS only.", exc)
 
     def _ensure(self):
-        if self._model is None:
-            from sentence_transformers import SentenceTransformer
+        with self._model_lock:
+            if self._model is None:
+                from sentence_transformers import SentenceTransformer
 
-            log.info("loading embedding model %s ...", self.model_name)
-            self._model = SentenceTransformer(self.model_name)
-        return self._model
+                log.info("loading embedding model %s ...", self.model_name)
+                self._model = SentenceTransformer(self.model_name)
+            return self._model
 
     def encode(self, texts: list[str]):
         model = self._ensure()
@@ -200,17 +203,21 @@ class KnowledgeBase:
     ):
         """``embedder`` overrides the config-driven one. It only has to expose
         ``available: bool`` and ``encode(list[str]) -> sequence of vectors``,
-        which is what the tests inject instead of pulling in torch."""
+        which is what the tests inject instead of pulling in torch.
+
+        SQLite connections are per-thread: MCP tools run in worker threads
+        (see server.py), and a single sqlite3 connection must not cross
+        threads. WAL mode lets the per-thread connections read concurrently
+        while writes serialize through SQLite's own locking (busy-wait 30s).
+        """
         self.config = config
         self.db_path = Path(db_path) if db_path else config.db_path
         if str(self.db_path) != ":memory:":
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.db_path))
-        self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA journal_mode=WAL;")
-        self.conn.execute("PRAGMA foreign_keys=ON;")
-        self.conn.executescript(_SCHEMA)
-        self.conn.commit()
+        self._local = threading.local()
+        self._all_conns: list[sqlite3.Connection] = []
+        self._conn_lock = threading.Lock()
+        self.conn  # open (and schema-init) the calling thread's connection
         if embedder is not None:
             self._embedder = embedder
         else:
@@ -218,8 +225,31 @@ class KnowledgeBase:
                 _Embedder(config.embed_model) if config.use_embeddings else None
             )
 
+    @property
+    def conn(self) -> sqlite3.Connection:
+        """This thread's connection (created and schema-initialized on first
+        use from the thread)."""
+        c = getattr(self._local, "conn", None)
+        if c is None:
+            c = sqlite3.connect(str(self.db_path), timeout=30.0)
+            c.row_factory = sqlite3.Row
+            c.execute("PRAGMA journal_mode=WAL;")
+            c.execute("PRAGMA foreign_keys=ON;")
+            c.executescript(_SCHEMA)
+            c.commit()
+            self._local.conn = c
+            with self._conn_lock:
+                self._all_conns.append(c)
+        return c
+
     def close(self) -> None:
-        self.conn.close()
+        with self._conn_lock:
+            for c in self._all_conns:
+                try:
+                    c.close()
+                except Exception:  # noqa: BLE001 - best effort on shutdown
+                    pass
+            self._all_conns.clear()
 
     # -- ingest ------------------------------------------------------------
 

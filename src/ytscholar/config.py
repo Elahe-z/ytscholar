@@ -82,6 +82,12 @@ class Config:
     cache_ttl_days: int = field(
         default_factory=lambda: _get_int("YTSCHOLAR_CACHE_TTL_DAYS", 30)
     )
+    # Per-request network timeout (seconds) for YouTube-facing calls. Bounds
+    # how long any single search/transcript HTTP request may hang — without
+    # it, a dead proxy connection can block a tool call indefinitely.
+    socket_timeout_s: float = field(
+        default_factory=lambda: _get_float("YTSCHOLAR_SOCKET_TIMEOUT", 30.0)
+    )
 
     # --- RAG / embeddings --------------------------------------------------
     # Turn semantic embeddings on/off. Off => keyword-only (FTS5) retrieval,
