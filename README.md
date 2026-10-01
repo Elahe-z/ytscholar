@@ -97,7 +97,7 @@ Only what exists and works today:
 - Proxy and browser-cookie support for restricted networks (validated against
   a real filtered-network setup)
 - Clean, actionable CLI errors instead of tracebacks
-- Offline test suite (36 tests: URL/VTT parsing, chunking, storage, metadata
+- Offline test suite (37 tests: URL/VTT parsing, chunking, storage, metadata
   merging, FTS retrieval, cache freshness, topic filter, evidence grouping,
   semantic re-rank plumbing, thread-safety, network timeouts) + CI on
   Python 3.10–3.12
@@ -133,7 +133,7 @@ the repo):
 | `YTSCHOLAR_CHUNK_CHARS` | `900` | Approx chars per retrieval chunk |
 | `YTSCHOLAR_HTTP_PROXY` | (from `HTTP_PROXY`) | Proxy for reaching YouTube |
 | `YTSCHOLAR_HTTPS_PROXY` | (from `HTTPS_PROXY`) | HTTPS proxy for reaching YouTube |
-| `YTSCHOLAR_COOKIES_FROM_BROWSER` | (unset) | Browser to read YouTube cookies from (`firefox`, `chrome`, `chromium`, `brave`, `edge`) |
+| `YTSCHOLAR_COOKIES_FROM_BROWSER` | (unset) | Browser to read YouTube cookies from (`firefox`, `chrome`, `chromium`, `brave`, `edge`); add a profile as `chrome:Profile 10` |
 | `YTSCHOLAR_COOKIES_FILE` | (unset) | Path to an exported `cookies.txt` |
 
 ## Usage
@@ -374,6 +374,13 @@ If YouTube answers `IpBlocked` / "Sign in to confirm you're not a bot"
 export YTSCHOLAR_COOKIES_FROM_BROWSER="firefox"   # or chrome / brave / edge
 ```
 
+If your YouTube login lives in a non-default Chrome profile, name it:
+`YTSCHOLAR_COOKIES_FROM_BROWSER="chrome:Profile 10"`. On Linux, reading
+Chrome cookies additionally needs `pip install secretstorage` in the same
+environment. (Cookies apply to the yt-dlp paths — search and the caption
+fallback — which is exactly what unblocks mining when the primary API is
+rate-limited.)
+
 Or export a `cookies.txt` (browser extension) and set
 `YTSCHOLAR_COOKIES_FILE=/path/to/cookies.txt`.
 
@@ -381,7 +388,7 @@ Or export a `cookies.txt` (browser extension) and set
 
 ```bash
 pip install -e ".[dev]"
-pytest -q          # 36 offline tests — no network, no heavy deps needed
+pytest -q          # 37 offline tests — no network, no heavy deps needed
 ```
 
 CI (`.github/workflows/ci.yml`) runs this suite on Python 3.10–3.12 for every

@@ -1,7 +1,25 @@
 """Offline tests for URL/id parsing and VTT parsing (no network)."""
 import pytest
 
-from ytscholar.youtube import extract_video_id, parse_vtt, timestamped_url
+from ytscholar.youtube import (
+    _apply_cookie_opts,
+    extract_video_id,
+    parse_vtt,
+    timestamped_url,
+)
+
+
+def test_cookie_opts_browser_and_profile():
+    """Bare browser name -> default profile; "chrome:Profile 10" selects it."""
+    bare, profiled, filed = {}, {}, {}
+    _apply_cookie_opts(bare, cookies_from_browser="chrome")
+    _apply_cookie_opts(profiled, cookies_from_browser="chrome:Profile 10")
+    _apply_cookie_opts(filed, cookies_from_browser="chrome", cookies_file="/c.txt")
+    assert bare["cookiesfrombrowser"] == ("chrome", None)
+    assert profiled["cookiesfrombrowser"] == ("chrome", "Profile 10")
+    # an explicit cookies file always wins
+    assert "cookiesfrombrowser" not in filed
+    assert filed["cookiefile"] == "/c.txt"
 
 
 @pytest.mark.parametrize(

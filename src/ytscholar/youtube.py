@@ -102,12 +102,18 @@ def _apply_cookie_opts(
     cookies_from_browser: Optional[str] = None,
     cookies_file: Optional[str] = None,
 ) -> None:
-    """Add yt-dlp cookie options in place, to pass YouTube's bot check."""
+    """Add yt-dlp cookie options in place, to pass YouTube's bot check.
+
+    ``cookies_from_browser`` may be a bare browser name (``chrome``) or
+    ``browser:profile`` (``chrome:Profile 10``) to pick a non-default
+    profile — needed when the YouTube login lives in another profile.
+    """
     if cookies_file:
         opts["cookiefile"] = cookies_file
     elif cookies_from_browser:
         # yt-dlp expects a tuple: (browser, profile, keyring, container)
-        opts["cookiesfrombrowser"] = (cookies_from_browser,)
+        browser, _, profile = cookies_from_browser.partition(":")
+        opts["cookiesfrombrowser"] = (browser, profile or None)
 
 
 def _timeout_session(timeout_s: float):
