@@ -97,7 +97,7 @@ Only what exists and works today:
 - Proxy and browser-cookie support for restricted networks (validated against
   a real filtered-network setup)
 - Clean, actionable CLI errors instead of tracebacks
-- Offline test suite (37 tests: URL/VTT parsing, chunking, storage, metadata
+- Offline test suite (40 tests: URL/VTT parsing, chunking, storage, metadata
   merging, FTS retrieval, cache freshness, topic filter, evidence grouping,
   semantic re-rank plumbing, thread-safety, network timeouts) + CI on
   Python 3.10–3.12
@@ -127,6 +127,7 @@ the repo):
 | `YTSCHOLAR_MAX_VIDEOS` | `15` | **Hard cap** on videos per research call |
 | `YTSCHOLAR_REQUEST_DELAY` | `0.8` | Seconds between transcript fetches |
 | `YTSCHOLAR_SOCKET_TIMEOUT` | `30` | Per-request network timeout (seconds) |
+| `YTSCHOLAR_SLEEP_REQUESTS` | `1` | Pause between HTTP requests inside one yt-dlp run (seconds); guards against bot-wall re-triggering on VPN IPs |
 | `YTSCHOLAR_CACHE_TTL_DAYS` | `30` | Skip re-fetching a video seen within N days |
 | `YTSCHOLAR_EMBEDDINGS` | `0` | `1` to enable semantic re-rank (experimental) |
 | `YTSCHOLAR_EMBED_MODEL` | `all-MiniLM-L6-v2` | sentence-transformers model |
@@ -388,7 +389,7 @@ Or export a `cookies.txt` (browser extension) and set
 
 ```bash
 pip install -e ".[dev]"
-pytest -q          # 37 offline tests — no network, no heavy deps needed
+pytest -q          # 40 offline tests — no network, no heavy deps needed
 ```
 
 CI (`.github/workflows/ci.yml`) runs this suite on Python 3.10–3.12 for every

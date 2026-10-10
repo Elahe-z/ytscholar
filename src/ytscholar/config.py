@@ -88,6 +88,12 @@ class Config:
     socket_timeout_s: float = field(
         default_factory=lambda: _get_float("YTSCHOLAR_SOCKET_TIMEOUT", 30.0)
     )
+    # Delay between HTTP requests *within* one yt-dlp run (seconds). Field
+    # lesson: back-to-back requests on a VPN exit IP can re-trigger
+    # YouTube's bot wall; a small pause between them avoids it. 0 disables.
+    sleep_requests_s: float = field(
+        default_factory=lambda: _get_float("YTSCHOLAR_SLEEP_REQUESTS", 1.0)
+    )
 
     # --- RAG / embeddings --------------------------------------------------
     # Turn semantic embeddings on/off. Off => keyword-only (FTS5) retrieval,

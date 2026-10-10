@@ -55,6 +55,7 @@ class Agent:
             cookies_from_browser=self.config.cookies_from_browser or None,
             cookies_file=self.config.cookies_file or None,
             timeout=self.config.socket_timeout_s,
+            sleep=self.config.sleep_requests_s,
         )
         meta = None
         if store:
@@ -67,6 +68,7 @@ class Agent:
                 cookies_from_browser=self.config.cookies_from_browser or None,
                 cookies_file=self.config.cookies_file or None,
                 timeout=self.config.socket_timeout_s,
+            sleep=self.config.sleep_requests_s,
             )
         if meta is None:
             meta = youtube.VideoMeta(
@@ -107,6 +109,7 @@ class Agent:
             cookies_from_browser=self.config.cookies_from_browser or None,
             cookies_file=self.config.cookies_file or None,
             timeout=self.config.socket_timeout_s,
+            sleep=self.config.sleep_requests_s,
         )
 
         per_video = []
@@ -132,6 +135,7 @@ class Agent:
                     cookies_from_browser=self.config.cookies_from_browser or None,
                     cookies_file=self.config.cookies_file or None,
                     timeout=self.config.socket_timeout_s,
+            sleep=self.config.sleep_requests_s,
                 )
                 chunks = self.kb.add_transcript(meta, t, topic=topic)
                 total_new_chunks += chunks

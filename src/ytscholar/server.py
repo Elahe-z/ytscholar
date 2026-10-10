@@ -94,6 +94,11 @@ async def get_transcript(
             knowledge base so future searches can draw on it.
 
     Returns a dict with the plain-text transcript, language, and metadata.
+
+    Note: on slow networks a large transcript can outlive the client's
+    timeout while the server keeps fetching. With store=true (default) the
+    result still lands in the knowledge base — check knowledge_stats before
+    retrying.
     """
     langs = [s.strip() for s in languages.split(",") if s.strip()] or None
     a = agent()

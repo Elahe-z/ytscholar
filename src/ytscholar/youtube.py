@@ -116,6 +116,20 @@ def _apply_cookie_opts(
         opts["cookiesfrombrowser"] = (browser, profile or None)
 
 
+def _ytdlp_base_opts(timeout: float, sleep: float) -> dict:
+    """Shared yt-dlp options: bounded sockets + a polite pause between HTTP
+    requests (field-tested: back-to-back requests on a VPN exit IP can
+    re-trigger YouTube's bot wall)."""
+    return {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "noplaylist": True,
+        "socket_timeout": timeout,
+        "sleep_interval_requests": sleep,
+    }
+
+
 def _timeout_session(timeout_s: float):
     """A requests.Session that applies a default timeout to every request.
 
@@ -141,6 +155,7 @@ def search_videos(
     cookies_from_browser: Optional[str] = None,
     cookies_file: Optional[str] = None,
     timeout: float = 30.0,
+    sleep: float = 1.0,
 ) -> list[VideoMeta]:
     """Return up to ``limit`` top videos for ``query`` using yt-dlp search.
 
@@ -151,15 +166,11 @@ def search_videos(
     import yt_dlp  # imported lazily so import cost is only paid when used
 
     limit = max(1, int(limit))
-    opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
+    opts = _ytdlp_base_opts(timeout, sleep)
+    opts.update({
         "extract_flat": True,
         "default_search": "ytsearch",
-        "noplaylist": True,
-        "socket_timeout": timeout,
-    }
+    })
     if proxy:
         opts["proxy"] = proxy
     _apply_cookie_opts(opts, cookies_from_browser, cookies_file)
@@ -191,6 +202,7 @@ def fetch_video_meta(
     cookies_from_browser: Optional[str] = None,
     cookies_file: Optional[str] = None,
     timeout: float = 30.0,
+    sleep: float = 1.0,
 ) -> Optional[VideoMeta]:
     """Look up title/channel/duration for a single video. Best effort.
 
@@ -200,13 +212,7 @@ def fetch_video_meta(
     try:
         import yt_dlp
 
-        opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "skip_download": True,
-            "noplaylist": True,
-            "socket_timeout": timeout,
-        }
+        opts = _ytdlp_base_opts(timeout, sleep)
         if proxy:
             opts["proxy"] = proxy
         _apply_cookie_opts(opts, cookies_from_browser, cookies_file)
@@ -395,24 +401,21 @@ def _fetch_via_ytdlp(
     cookies_from_browser: Optional[str] = None,
     cookies_file: Optional[str] = None,
     timeout: float = 30.0,
+    sleep: float = 1.0,
 ) -> Transcript:
     """Fallback: let yt-dlp download the caption track, then parse the VTT."""
     import yt_dlp
 
     with tempfile.TemporaryDirectory() as tmp:
         outtmpl = str(Path(tmp) / "%(id)s")
-        opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "skip_download": True,
+        opts = _ytdlp_base_opts(timeout, sleep)
+        opts.update({
             "writesubtitles": True,
             "writeautomaticsub": True,
             "subtitleslangs": languages + ["en"],
             "subtitlesformat": "vtt",
             "outtmpl": outtmpl,
-            "noplaylist": True,
-            "socket_timeout": timeout,
-        }
+        })
         if proxy:
             opts["proxy"] = proxy
         _apply_cookie_opts(opts, cookies_from_browser, cookies_file)
@@ -460,6 +463,7 @@ def get_transcript(
     cookies_from_browser: Optional[str] = None,
     cookies_file: Optional[str] = None,
     timeout: float = 30.0,
+    sleep: float = 1.0,
 ) -> Transcript:
     """Fetch a transcript for a video (URL or id), trying API then yt-dlp.
 
@@ -492,6 +496,7 @@ def get_transcript(
                 cookies_from_browser=cookies_from_browser,
                 cookies_file=cookies_file,
                 timeout=timeout,
+                sleep=sleep,
             )
         except Exception as exc:  # noqa: BLE001
             errors.append(f"yt-dlp: {type(exc).__name__}: {exc}")
